@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0e17" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <title>Rail Replacement A&amp;D Dashboard</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="app-bg" aria-hidden="true"></div>
+
+  <div class="app-chrome" id="app-chrome">
+  <header class="site-header">
+    <div class="header-station">
+      <button
+        type="button"
+        id="upload-trigger"
+        class="brand-icon"
+        title="Upload A&amp;D sheet — PDF, XLSX, or CSV"
+        aria-label="Upload or replace A&amp;D sheet"
+      >◈</button>
+      <input type="file" id="file-input" accept=".pdf,.xlsx,.xls,.csv" hidden />
+      <p id="station-title" class="station-title">Tap ◈ to upload A&amp;D sheet</p>
+    </div>
+    <div class="clock-block">
+      <time id="live-clock" class="live-clock">--:--:--</time>
+      <p id="live-date" class="live-date"></p>
+    </div>
+    <h1 class="sr-only">Rail Replacement Ops</h1>
+  </header>
+
+  <section class="sheet-bar" id="upload-section" hidden>
+    <p id="upload-loaded-label" class="sheet-bar-label"></p>
+  </section>
+  <p id="parse-status" class="parse-status" hidden></p>
+
+  <nav class="tabs tabs--primary" id="tabs-primary" role="tablist" aria-label="Dashboard sections">
+    <button type="button" class="tab-btn active" data-tab="live" role="tab" aria-selected="true">Live</button>
+    <button type="button" class="tab-btn" data-tab="completed" role="tab" aria-selected="false">Done</button>
+    <button type="button" class="tab-btn" data-tab="cheat" role="tab" aria-selected="false">Routes</button>
+    <button type="button" class="tab-btn" data-tab="full" role="tab" aria-selected="false">Full A&amp;D</button>
+  </nav>
+
+  <div class="live-chrome-bar is-visible" id="live-chrome-bar">
+    <nav class="live-subtabs" id="live-subtabs" role="tablist" aria-label="Live board view">
+      <button type="button" class="live-sub-btn active" data-live-filter="departures" role="tab" aria-selected="true">Departures</button>
+      <button type="button" class="live-sub-btn" data-live-filter="arrivals" role="tab" aria-selected="false">Arrivals</button>
+      <button type="button" class="live-sub-btn" data-live-filter="all" role="tab" aria-selected="false">All</button>
+    </nav>
+  </div>
+  </div>
+
+  <main class="main-content" id="main-content">
+    <section id="panel-live" class="tab-panel active" role="tabpanel">
+      <header class="panel-header panel-header--live">
+        <h2>Live vehicles</h2>
+        <p id="panel-live-sub" class="panel-sub">Coaches at station · arrived → next departure</p>
+      </header>
+      <p id="live-board-empty" class="empty-msg empty-msg--hero">Drop an A&amp;D sheet above to see live departures.</p>
+      <div id="live-board-list" class="card-grid"></div>
+    </section>
+
+    <section id="panel-completed" class="tab-panel" role="tabpanel">
+      <header class="panel-header">
+        <h2>Completed services</h2>
+        <p class="panel-sub">Acknowledged movements · saved in this browser</p>
+      </header>
+      <p id="completed-empty" class="empty-msg">No completed services yet.</p>
+      <div id="completed-list" class="card-grid"></div>
+    </section>
+
+    <section id="panel-cheat" class="tab-panel" role="tabpanel">
+      <header class="panel-header">
+        <h2>Route cheat sheet</h2>
+      </header>
+      <div id="cheat-sheet-content"></div>
+    </section>
+
+    <section id="panel-full" class="tab-panel" role="tabpanel">
+      <header class="panel-header">
+        <h2>Full A&amp;D</h2>
+        <p class="panel-sub">All arrivals and departures · scroll or tap a time</p>
+      </header>
+      <div class="full-ad-sticky" id="full-ad-sticky">
+        <div class="time-scrubber-panel" id="time-scrubber-panel" hidden>
+          <p class="time-scrubber-label">Jump to time <span class="time-scrubber-hint">· follows scroll on desktop</span></p>
+          <div class="time-scrubber" id="time-scrubber" role="list" aria-label="Times on sheet"></div>
+        </div>
+        <div class="table-toolbar-wrap">
+          <button
+            type="button"
+            id="table-filters-toggle"
+            class="table-filters-toggle"
+            aria-expanded="false"
+            aria-controls="table-toolbar"
+          >
+            <span class="table-filters-toggle-label">Filters</span>
+            <span id="table-count" class="table-count">—</span>
+          </button>
+          <div class="table-toolbar" id="table-toolbar" hidden>
+            <input type="search" id="table-search" class="search-input" placeholder="Search destination, operator, coach, TOC…" />
+            <select id="filter-type" class="filter-select">
+              <option value="">All types</option>
+              <option value="D">Departures only</option>
+              <option value="A">Arrivals only</option>
+            </select>
+            <select id="filter-sort" class="filter-select">
+              <option value="asc">Time ↑</option>
+              <option value="desc">Time ↓</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Type</th>
+              <th>Destination</th>
+              <th>Operator</th>
+              <th>Vehicle</th>
+              <th>Calling</th>
+              <th>Coach</th>
+              <th>TOC</th>
+              <th>Route</th>
+            </tr>
+          </thead>
+          <tbody id="full-table-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <nav class="mobile-dock" id="mobile-dock" aria-label="Section navigation">
+    <button type="button" class="dock-btn active" data-tab="live" aria-label="Live vehicles">
+      <span class="dock-icon" aria-hidden="true">◉</span>
+      <span class="dock-label">Live</span>
+    </button>
+    <button type="button" class="dock-btn" data-tab="completed" aria-label="Completed">
+      <span class="dock-icon" aria-hidden="true">✓</span>
+      <span class="dock-label">Done</span>
+    </button>
+    <button type="button" class="dock-btn" data-tab="cheat" aria-label="Cheat sheet">
+      <span class="dock-icon" aria-hidden="true">≡</span>
+      <span class="dock-label">Routes</span>
+    </button>
+    <button type="button" class="dock-btn" data-tab="full" aria-label="Full A and D">
+      <span class="dock-icon" aria-hidden="true">▤</span>
+      <span class="dock-label">Table</span>
+    </button>
+  </nav>
+
+  <button type="button" id="scroll-top-btn" class="scroll-top-btn" aria-label="Back to top">
+    <span aria-hidden="true">↑</span>
+  </button>
+
+  <footer class="site-footer">
+    <p>Created by DexNeXuS</p>
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <script src="js/parser.js"></script>
+  <script src="js/cheatSheet.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/pdfParser.js"></script>
+  <script src="js/xlsxParser.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
