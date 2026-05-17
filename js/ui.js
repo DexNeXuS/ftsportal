@@ -18,6 +18,17 @@ function formatCallingPattern(pattern) {
     .join('');
 }
 
+/** Compact stop list for live vehicle cards (time + code only). */
+function formatCallingPatternCompact(pattern) {
+  if (!pattern?.length) return '';
+  return pattern
+    .map(
+      (s) =>
+        `<span class="stop-chip stop-chip--mini"><span class="stop-time">${escapeHtml(s.time)}</span> <span class="stop-code">${escapeHtml(s.code)}</span></span>`
+    )
+    .join('');
+}
+
 function formatCallingChain(pattern, sheetCode) {
   if (!pattern?.length) return `${sheetCode} → destination`;
   const codes = [];
@@ -149,9 +160,23 @@ function vehicleCard(
         : `<p class="layover">Layover: <strong>${escapeHtml(AD.formatLayover(cycle.layoverMins))}</strong></p>`
       : '';
 
+  const callingPattern = cycle.callingPattern || dep.callingPattern || [];
+  const isStoppers = !cycle.isDirect && callingPattern.length > 2;
+  const routeChain = isStoppers ? formatCallingChain(callingPattern, stationCode) : '';
+
   const directTag = cycle.isDirect
     ? '<span class="tag tag-direct">Direct</span>'
-    : '<span class="tag tag-stoppers">Stoppers</span>';
+    : `<button type="button" class="tag tag-stoppers tag-stoppers--toggle" data-action="toggle-stoppers" aria-expanded="false" title="Tap to show stop times">Stoppers</button>`;
+
+  const routeInline = isStoppers
+    ? `<span class="vehicle-route-inline" title="Calling pattern">${escapeHtml(routeChain)}</span>`
+    : '';
+
+  const routeDetail = isStoppers
+    ? `<div class="vehicle-route-detail" hidden>
+        <div class="calling-stops calling-stops--compact">${formatCallingPatternCompact(callingPattern)}</div>
+      </div>`
+    : '';
 
   const typeTag =
     vehicleState === 'inbound'
@@ -173,13 +198,15 @@ function vehicleCard(
       </div>
       ${timesBlock}
       ${layoverBlock}
-      <p class="dest-name-line">${escapeHtml(cycle.destinationName)}</p>
-      <div class="card-tags">
+      <p class="dest-name-line">${escapeHtml(AD.shortDestinationLabel({ destinationCode: cycle.destinationCode, destinationName: cycle.destinationName }))}</p>
+      <div class="card-tags card-tags--vehicle">
         ${typeTag}
         ${directTag}
+        ${routeInline}
       </div>
+      ${routeDetail}
       <dl class="card-details card-details--compact">
-        <div><dt>Operator</dt><dd>${escapeHtml(cycle.operator || '—')}</dd></div>
+        <div><dt>Operator</dt><dd>${escapeHtml(AD.displayOperator(cycle.departure || cycle.arrival || cycle))}</dd></div>
         <div><dt>TOC</dt><dd>${escapeHtml(cycle.toc || '—')}</dd></div>
       </dl>
       ${completedInfo}
@@ -213,7 +240,7 @@ function movementCard(m, { highlight = false, showComplete = true, showUndo = fa
       </header>
       <div class="card-dest">
         <span class="dest-code">${escapeHtml(m.destinationCode)}</span>
-        <span class="dest-name">${escapeHtml(m.destinationName)}</span>
+        <span class="dest-name">${escapeHtml(window.AD.shortDestinationLabel(m))}</span>
       </div>
       <div class="card-ops-ids">
         <span class="coach-badge" title="Coach / job number">Coach <strong>${escapeHtml(m.coachNumber || '—')}</strong></span>
@@ -224,7 +251,7 @@ function movementCard(m, { highlight = false, showComplete = true, showUndo = fa
         ${directTag}
       </div>
       <dl class="card-details">
-        <div><dt>Operator</dt><dd>${escapeHtml(m.operator || '—')}</dd></div>
+        <div><dt>Operator</dt><dd>${escapeHtml(window.AD.displayOperator(m))}</dd></div>
         <div><dt>Vehicle</dt><dd>${escapeHtml(m.vehicleType || '—')}</dd></div>
         <div><dt>Coach / Job</dt><dd>${escapeHtml(m.coachNumber || '—')}</dd></div>
         <div><dt>TOC</dt><dd>${escapeHtml(m.toc || '—')}</dd></div>
@@ -317,7 +344,83 @@ function renderCompleted(movements) {
     .join('');
 }
 
-function renderCheatSheet(movements, sheet) {
+function activateCheatPatternTab(route, tab) {
+  if (!tab) return;
+  route.querySelectorAll('.cheat-tab').forEach((t) => {
+    const on = t === tab;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  const value = route.querySelector('.cheat-pattern-value');
+  if (value) value.textContent = tab.dataset.minutes;
+}
+
+function applyCheatSheetTimeTabs(container, hour) {
+  if (!container) return;
+  container.querySelectorAll('.cheat-route').forEach((route) => {
+    const tabs = route.querySelectorAll('.cheat-tab');
+    if (!tabs.length) return;
+
+    let active = route.querySelector('.cheat-tab[data-tab-key="usual"]');
+    route.querySelectorAll('.cheat-tab[data-hours]').forEach((tab) => {
+      const hours = tab.dataset.hours.split(',').map((h) => parseInt(h, 10));
+      if (hours.includes(hour)) active = tab;
+    });
+    activateCheatPatternTab(route, active);
+  });
+}
+
+function cheatRouteCard(r, hour) {
+  const variants = r.hourVariants || [];
+  const activeKey = window.AD.patternTabKeyForHour(r, hour);
+  const activePattern = window.AD.patternForTabKey(r, activeKey);
+  const tabs =
+    variants.length > 0
+      ? `
+          <nav class="cheat-pattern-tabs" aria-label="Departure pattern by time of day">
+            <button type="button" class="cheat-tab${activeKey === 'usual' ? ' active' : ''}" data-tab-key="usual" data-minutes="${escapeHtml(r.minutePattern)}" aria-selected="${activeKey === 'usual' ? 'true' : 'false'}">Usual</button>
+            ${variants
+              .map(
+                (v, i) => {
+                  const key = `variant-${i}`;
+                  const isActive = activeKey === key;
+                  return `
+              <button type="button" class="cheat-tab${isActive ? ' active' : ''}" data-tab-key="${key}" data-hours="${v.hours.join(',')}" data-minutes="${escapeHtml(v.minutePattern)}" aria-selected="${isActive ? 'true' : 'false'}" title="Pattern during ${escapeHtml(v.tabLabel)}">
+                ${escapeHtml(v.tabLabel)}
+              </button>`;
+                }
+              )
+              .join('')}
+          </nav>`
+      : '';
+
+  return `
+        <article class="cheat-route">
+          <header>
+            <span class="cheat-code">${escapeHtml(r.code)}</span>
+            <h3>${escapeHtml(r.name)}</h3>
+          </header>
+          ${tabs}
+          <p class="cheat-pattern"><span class="label">Pattern:</span> <strong class="cheat-pattern-value">${escapeHtml(activePattern)}</strong></p>
+          <p class="cheat-stops">
+            <span class="label">${r.isDirect ? 'Route:' : 'Stops:'}</span>
+            <code>${escapeHtml(r.stops)}</code>
+          </p>
+          ${r.isDirect ? '<span class="tag tag-direct">Fast direct mostly</span>' : '<span class="tag tag-stoppers">Stopper service</span>'}
+        </article>`;
+}
+
+function wireCheatSheetTabs(container) {
+  container.onclick = (e) => {
+    const tab = e.target.closest('.cheat-tab');
+    if (!tab) return;
+    const route = tab.closest('.cheat-route');
+    if (!route) return;
+    activateCheatPatternTab(route, tab);
+  };
+}
+
+function renderCheatSheet(movements, sheet, now = new Date()) {
   const container = document.getElementById('cheat-sheet-content');
   if (!container) return;
 
@@ -336,26 +439,11 @@ function renderCheatSheet(movements, sheet) {
     return;
   }
 
+  const hour = now.getHours();
+
   container.innerHTML = `
     <div class="cheat-grid">
-      ${routes
-        .map(
-          (r) => `
-        <article class="cheat-route">
-          <header>
-            <span class="cheat-code">${escapeHtml(r.code)}</span>
-            <h3>${escapeHtml(r.name)}</h3>
-          </header>
-          <p class="cheat-pattern"><span class="label">Pattern:</span> <strong>${escapeHtml(r.minutePattern)}</strong></p>
-          <p class="cheat-stops">
-            <span class="label">${r.isDirect ? 'Route:' : 'Stops:'}</span>
-            <code>${escapeHtml(r.stops)}</code>
-          </p>
-          ${r.isDirect ? '<span class="tag tag-direct">Fast direct mostly</span>' : '<span class="tag tag-stoppers">Stopper service</span>'}
-        </article>
-      `
-        )
-        .join('')}
+      ${routes.map((r) => cheatRouteCard(r, hour)).join('')}
     </div>
     <aside class="cheat-legend">
       <h4>Station codes on this sheet</h4>
@@ -366,6 +454,8 @@ function renderCheatSheet(movements, sheet) {
       </ul>
     </aside>
   `;
+
+  wireCheatSheetTabs(container);
 }
 
 function showEmptyState() {
@@ -441,8 +531,8 @@ function renderFullTable(movements, filters = {}) {
     <tr data-id="${escapeHtml(m.id)}" data-row-time="${escapeHtml(window.AD.padTime(m.time))}">
       <td>${escapeHtml(m.time)}</td>
       <td><span class="tag ${m.movementType === 'D' ? 'type-departure' : 'type-arrival'}">${m.movementType}</span></td>
-      <td><strong>${escapeHtml(m.destinationCode)}</strong> ${escapeHtml(m.destinationName)}</td>
-      <td>${escapeHtml(m.operator || '—')}</td>
+      <td><strong>${escapeHtml(m.destinationCode)}</strong> ${escapeHtml(window.AD.shortDestinationLabel(m))}</td>
+      <td>${escapeHtml(window.AD.displayOperator(m))}</td>
       <td>${escapeHtml(m.vehicleType || '—')}</td>
       <td class="cell-calling">${escapeHtml(formatCallingChain(m.callingPattern, m.sheetStationCode))}</td>
       <td class="cell-coach"><strong>${escapeHtml(m.coachNumber || '—')}</strong></td>
@@ -677,6 +767,7 @@ function updateChromeMetrics() {
     renderLiveBoard,
     renderCompleted,
     renderCheatSheet,
+    applyCheatSheetTimeTabs,
     renderFullTable,
     updateCountdowns,
     showParseStatus,

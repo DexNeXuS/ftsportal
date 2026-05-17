@@ -12,9 +12,10 @@ function groupDestCode(code, sheetCode) {
   return c.slice(0, 4);
 }
 
-/** Pick a readable name for a destination group from movement data. */
+/** Pick a readable place name for a destination group (not the coach operator). */
 function groupDestName(sampleMovement) {
-  return (sampleMovement.destinationName || sampleMovement.destinationNameFull || sampleMovement.destinationCode || '')
+  if (window.AD.shortDestinationLabel) return window.AD.shortDestinationLabel(sampleMovement);
+  return (sampleMovement.destinationName || sampleMovement.destinationCode || '')
     .replace(/\s*\([^)]*\).*/, '')
     .trim();
 }
@@ -68,12 +69,98 @@ function callingPatternDisplay(movement, sheetCode) {
   };
 }
 
+function minuteToken(minute) {
+  return `:${String(minute).padStart(2, '0')}`;
+}
+
+function sortMinuteTokens(tokens) {
+  return [...tokens].sort((a, b) => parseInt(a.slice(1), 10) - parseInt(b.slice(1), 10));
+}
+
+function minutePatternFromSet(minuteSet) {
+  return sortMinuteTokens(minuteSet).join(' ');
+}
+
+/** Label for hour-specific pattern tabs (e.g. 7 → "07:00"). */
+function formatHourTab(hour) {
+  return `${String(hour).padStart(2, '0')}:00`;
+}
+
+/**
+ * Compare departure minutes per clock hour; pick the usual pattern and flag hours that differ.
+ */
+function analyzeHourPatterns(byHour) {
+  const hourEntries = [];
+  for (const [hour, minutes] of byHour) {
+    if (!minutes.size) continue;
+    hourEntries.push({ hour, minutes, key: minutePatternFromSet(minutes) });
+  }
+  if (!hourEntries.length) {
+    return { minutePattern: '', minutes: [], hourVariants: [] };
+  }
+
+  const keyCounts = new Map();
+  for (const entry of hourEntries) {
+    keyCounts.set(entry.key, (keyCounts.get(entry.key) || 0) + 1);
+  }
+
+  let defaultKey = hourEntries[0].key;
+  let maxCount = 0;
+  for (const [key, count] of keyCounts) {
+    if (count > maxCount) {
+      maxCount = count;
+      defaultKey = key;
+    }
+  }
+
+  const defaultSet = new Set(defaultKey.split(' ').filter(Boolean));
+  const variantGroups = new Map();
+
+  for (const entry of hourEntries) {
+    if (entry.key === defaultKey) continue;
+
+    const variantSet = new Set(entry.key.split(' ').filter(Boolean));
+    let isSubsetOfDefault = true;
+    for (const token of variantSet) {
+      if (!defaultSet.has(token)) {
+        isSubsetOfDefault = false;
+        break;
+      }
+    }
+    // Skip hours with fewer departures than usual (start/end of service).
+    if (variantSet.size < defaultSet.size && isSubsetOfDefault) continue;
+
+    if (!variantGroups.has(entry.key)) {
+      variantGroups.set(entry.key, { minutePattern: entry.key, hours: [] });
+    }
+    variantGroups.get(entry.key).hours.push(entry.hour);
+  }
+
+  const defaultMinutes = sortMinuteTokens(defaultKey.split(' ').filter(Boolean));
+  const hourVariants = [...variantGroups.values()]
+    .map((v) => {
+      v.hours.sort((a, b) => a - b);
+      return {
+        minutePattern: v.minutePattern,
+        hours: v.hours,
+        tabLabel: v.hours.map(formatHourTab).join(' · '),
+      };
+    })
+    .sort((a, b) => a.hours[0] - b.hours[0]);
+
+  return {
+    minutePattern: defaultKey,
+    minutes: defaultMinutes,
+    hourVariants,
+  };
+}
+
 function buildCheatSheet(movements, sheetCode) {
   const deps = movements.filter((m) => window.AD.isDepartureFromStation(m));
   const groups = new Map();
 
   for (const m of deps) {
-    const [h] = m.time.split(':').map(Number);
+    const [h, min] = m.time.split(':').map(Number);
     if (h < 5 || h > 23) continue;
 
     const code = groupDestCode(m.destinationCode, sheetCode);
@@ -83,16 +170,13 @@ function buildCheatSheet(movements, sheetCode) {
       groups.set(code, {
         code,
         name: groupDestName(m),
-        minutes: new Set(),
+        byHour: new Map(),
         sampleMovement: m,
       });
     }
     const g = groups.get(code);
-    if (m.destinationName && m.destinationName.length > (g.name || '').length) {
-      g.name = groupDestName(m);
-    }
-    const mins = parseInt(m.time.split(':')[1], 10);
-    g.minutes.add(`:${String(mins).padStart(2, '0')}`);
+    if (!g.byHour.has(h)) g.byHour.set(h, new Set());
+    g.byHour.get(h).add(minuteToken(min));
     if ((m.callingPattern?.length || 0) > (g.sampleMovement?.callingPattern?.length || 0)) {
       g.sampleMovement = m;
     }
@@ -100,15 +184,14 @@ function buildCheatSheet(movements, sheetCode) {
 
   return [...groups.values()]
     .map((g) => {
-      const minuteList = [...g.minutes].sort(
-        (a, b) => parseInt(a.slice(1), 10) - parseInt(b.slice(1), 10)
-      );
+      const hourAnalysis = analyzeHourPatterns(g.byHour);
       const pattern = callingPatternDisplay(g.sampleMovement, sheetCode);
       return {
         code: g.code,
         name: g.name || g.code,
-        minutes: minuteList,
-        minutePattern: minuteList.join(' '),
+        minutes: hourAnalysis.minutes,
+        minutePattern: hourAnalysis.minutePattern,
+        hourVariants: hourAnalysis.hourVariants,
         stops: pattern.chain,
         isDirect: pattern.isDirect,
         stopLabel: pattern.label,
@@ -138,8 +221,26 @@ function collectStationCodes(movements, sheet) {
     .sort((a, b) => a.code.localeCompare(b.code));
 }
 
+/** Which pattern tab applies for a given clock hour (e.g. 7 → "variant-0", else "usual"). */
+function patternTabKeyForHour(route, hour) {
+  const variants = route.hourVariants || [];
+  for (let i = 0; i < variants.length; i++) {
+    if (variants[i].hours.includes(hour)) return `variant-${i}`;
+  }
+  return 'usual';
+}
+
+function patternForTabKey(route, tabKey) {
+  if (tabKey === 'usual') return route.minutePattern;
+  const idx = parseInt(tabKey.replace('variant-', ''), 10);
+  const variant = route.hourVariants?.[idx];
+  return variant?.minutePattern || route.minutePattern;
+}
+
 (function (g) {
   g.AD = g.AD || {};
   g.AD.buildCheatSheet = buildCheatSheet;
   g.AD.collectStationCodes = collectStationCodes;
+  g.AD.patternTabKeyForHour = patternTabKeyForHour;
+  g.AD.patternForTabKey = patternForTabKey;
 })(window);

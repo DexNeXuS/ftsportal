@@ -915,6 +915,58 @@ button,
   color: var(--warning);
 }
 
+.tag-stoppers--toggle {
+  display: inline-block;
+  cursor: pointer;
+  border: none;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.25rem 0.55rem;
+  transition: box-shadow 0.15s, filter 0.15s;
+}
+
+.tag-stoppers--toggle:hover {
+  filter: brightness(1.12);
+}
+
+.tag-stoppers--toggle[aria-expanded='true'] {
+  box-shadow: 0 0 0 1px var(--warning);
+}
+
+.vehicle-card .card-tags--vehicle {
+  margin-bottom: 0.65rem;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.vehicle-route-inline {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--cyan);
+  opacity: 0.9;
+}
+
+.vehicle-card .vehicle-route-detail {
+  margin: -0.15rem 0 0.5rem;
+}
+
+.vehicle-card .calling-stops--compact {
+  gap: 0.2rem;
+}
+
+.vehicle-card .stop-chip--mini {
+  font-size: 0.62rem;
+  padding: 0.12rem 0.3rem;
+  line-height: 1.2;
+}
+
 .card-details {
   margin: 0 0 1rem;
   display: grid;
@@ -1069,6 +1121,36 @@ button,
 .cheat-route h3 {
   margin: 0;
   font-size: 1rem;
+}
+
+.cheat-pattern-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0 0 0.65rem;
+}
+
+.cheat-tab {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.cheat-tab:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.cheat-tab.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(167, 139, 250, 0.12);
 }
 
 .cheat-pattern,

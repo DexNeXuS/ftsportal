@@ -114,14 +114,179 @@ function formatCoachNumber(val) {
   return m ? m[0] : s;
 }
 
+/** Remove calling-pattern stops accidentally merged into operator/destination text. */
+function stripCallingPatternText(text = '') {
+  return squash(
+    normaliseText(text)
+      .replace(/\d{1,2}:\d{2}\s+[A-Z0-9]{2,8}\s*-\s*(?:\([^)]*\)|[^,])*(?:,\s*[A-Z]{1,2}\d[\dA-Z\s]*)?/gi, ' ')
+      .replace(/\bpart\s+of\b/gi, ' ')
+  );
+}
+
+/** Canonical place labels for station/destination codes on A&D sheets. */
+const PLACE_BY_CODE = {
+  GLCB: 'Glasgow',
+  GLC: 'Glasgow',
+  CAR: 'Carlisle',
+  LOC: 'Lockerbie',
+  HUD: 'Huddersfield',
+  SPT: 'Stockport',
+  MAN: 'Manchester Piccadilly',
+  BGH: 'Brighouse',
+  WKK: 'Wakefield Kirkgate',
+  MSN: 'Marsden',
+  SYB: 'Stalybridge',
+  MTH: 'Motherwell',
+};
+
+const TRAIN_OPERATING_COMPANY =
+  /^(?:TransPennine\s+Trains|Avanti\s+West\s+Coast|Great\s+Western(?:\s+Railway)?|South\s+Western(?:\s+Railway)?|Northern|Lumo|Hull\s+Trains|GWR|SWR)/i;
+
+function isTrainOperatingCompany(name = '') {
+  return TRAIN_OPERATING_COMPANY.test(squash(name));
+}
+
+function looksLikeCallingPatternOnly(text = '') {
+  const s = squash(text);
+  if (!s) return false;
+  if (/^:\d{2}\s+[A-Z0-9]{2,8}\s*-/i.test(s)) return true;
+  if (/\d{1,2}:\d{2}\s+[A-Z0-9]{2,8}\s*-/i.test(s) && !/(Ltd|Limited|Travel|Coaches|Bus|Group|Services|T\/A|Park|Hamilton|Hirers)/i.test(s)) {
+    return true;
+  }
+  return false;
+}
+
+/** Pull just the coach operator / supplier name from a noisy operator cell. */
+function extractOperatorName(raw = '') {
+  let s = normaliseText(raw).trim();
+  if (!s) return '';
+  if (looksLikeCallingPatternOnly(s)) return '';
+
+  s = s.replace(/\(([^)]*(?:coach|bus|deck|wheelchair|standard|vehicle)[^)]*)\)/gi, ' ');
+  s = s.replace(/\(\s*part\s+of[^)]*\)/gi, ' ');
+  s = stripCallingPatternText(s);
+
+  const patterns = [
+    /\b([A-Za-z0-9&.'\u2019\-]+(?:\s+[A-Za-z0-9&.'\u2019\-]+)*?\s+T\/A\s+[A-Za-z0-9&.'\u2019\- ]+?)(?=\s{2,}|\d{1,2}:\d{2}\s|$)/i,
+    /\b([A-Z](?:\s*&\s*[A-Z])?\s+[A-Za-z0-9&.'\u2019\- ]+?(?:Ltd\.?|Limited|Travel|Travels|Coaches|Bus|Group|Services|Commercials|Cars|Transport|Xpress|Enterprises|Executive Travel|Coach Travel|Coaches Ltd|Travel Ltd|Travel Limited|Cars NW Ltd|GB LTD))\b/i,
+    /\b([A-Z][A-Za-z0-9&.'\u2019\- ]+?(?:Ltd\.?|LTD|Limited|Travel|Travels|Coaches|Bus|Group|Services|Commercials|Cars|Transport))\b/i,
+  ];
+
+  for (const re of patterns) {
+    const m = s.match(re);
+    if (m && m[1].length >= 5) return squash(m[1]);
+  }
+
+  const trimmed = squash(s);
+  return trimmed.length > 60 ? trimmed.slice(0, 60).trim() : trimmed;
+}
+
+/** Parenthetical or short suffixes on place names — not coach operators. */
+function isLocationQualifierOnly(text = '') {
+  const t = squash(text);
+  if (!t) return true;
+  if (/^\([^)]+\)$/.test(t)) return true;
+  if (/^car\s+park$/i.test(t)) return true;
+  return false;
+}
+
+/** Operator text embedded after the place name in a polluted destination field. */
+function extractOperatorFromDestinationName(movement) {
+  const code = (movement?.destinationCode || '').toUpperCase();
+  const full = squash(movement?.destinationNameFull || movement?.destinationName || '');
+  if (!full) return '';
+
+  const canonical = PLACE_BY_CODE[code];
+  let place = canonical || '';
+
+  if (!place) {
+    const parsed = code ? parseDestination(`${code} - ${full}`) : { name: full };
+    place = squash(parsed.name || full);
+    const cut = place.search(
+      /\s+(?=[A-Z][a-z]+(?:'s)?\s|(?:Ltd|Limited|Travel|Coaches|T\/A|Park|Hamilton|Hirers|Enterprises|Commercials| DM\b))/i
+    );
+    if (cut > 1) place = place.slice(0, cut).trim();
+  }
+
+  if (!place) return '';
+
+  const tail = full.replace(new RegExp(`^${place.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'i'), '').trim();
+  if (!tail || isLocationQualifierOnly(tail)) return '';
+
+  // Ignore short leftovers (e.g. "DM" from "Glasgow DM") — not a company name.
+  if (tail.length < 6 && !/(Ltd|Limited|Travel|Coaches|Hamilton|Hirers)/i.test(tail)) return '';
+
+  if (/(Ltd|Limited|Travel|Coaches|Hamilton|Hirers|T\/A|Enterprises|Commercials)/i.test(tail)) {
+    const embedded = squash(tail.replace(/\s*\([^)]*(?:coach|bus|wheelchair|vehicle)[^)]*\)\s*/gi, ' '));
+    if (embedded.length >= 8 && !isTrainOperatingCompany(embedded)) {
+      return embedded.length <= 80 ? embedded : embedded.slice(0, 80);
+    }
+  }
+
+  return '';
+}
+
+function isLikelyCoachOperatorName(name = '') {
+  const s = squash(name);
+  if (!s || looksLikeCallingPatternOnly(s) || isTrainOperatingCompany(s)) return false;
+  if (/(Ltd|Limited|Travel|Coaches|Park|Hamilton|Hirers|T\/A|Enterprises|Commercials)/i.test(s) && s.length >= 8) {
+    return true;
+  }
+  if (/^[A-Z](?:\s*&\s*[A-Z])?\s+[A-Za-z]/.test(s) && /(Ltd|Travel|Coaches)/i.test(s)) return true;
+  return false;
+}
+
+/** Best coach operator string for a movement (operator column + destination bleed). */
+function resolveCoachOperator(movement) {
+  const rawOp = squash(movement?.operator || '');
+  if (isLikelyCoachOperatorName(rawOp)) return rawOp;
+
+  const fromColumn = extractOperatorName(rawOp);
+  if (fromColumn && !isTrainOperatingCompany(fromColumn) && !looksLikeCallingPatternOnly(fromColumn)) {
+    return fromColumn;
+  }
+
+  const fromDestination = extractOperatorFromDestinationName(movement);
+  if (fromDestination) return fromDestination;
+
+  return '';
+}
+
+/** Short place name for route headings (strip supplier names bleeding into destination). */
+function shortDestinationLabel(movement) {
+  const code = (movement?.destinationCode || '').toUpperCase();
+  if (PLACE_BY_CODE[code]) return PLACE_BY_CODE[code];
+
+  let name = movement?.destinationName || movement?.destinationNameFull || '';
+  if (code && name) {
+    const parsed = parseDestination(`${code} - ${name}`);
+    name = parsed.name || name;
+  }
+  name = squash(name).replace(/\s*\([^)]*\)\s*$/, '').trim();
+  name = name.replace(/\s+DM\s*$/i, '').trim();
+  const cut = name.search(
+    /\s+(?=[A-Z][a-z]+(?:'s)?\s|(?:Ltd|T\/A|Travel|Travels|Coaches|Enterprises|Commercials|MTG|Group|Services|Spencer|Graham|Moving People|Park|Hamilton|Hirers)\b)/i
+  );
+  if (cut > 1) name = name.slice(0, cut).trim();
+  return name || code;
+}
+
 function parseOperatorField(raw = '', explicitVehicle = '') {
   const original = normaliseText(raw).trim();
   let vehicleType = cellToString(explicitVehicle);
   const vehicleMatches = [...original.matchAll(/\(([^)]*(?:coach|bus|deck|wheelchair|standard|vehicle)[^)]*)\)/gi)];
   if (!vehicleType && vehicleMatches.length) vehicleType = vehicleMatches[vehicleMatches.length - 1][1].trim();
-  let operator = original.replace(/\(([^)]*(?:coach|bus|deck|wheelchair|standard|vehicle)[^)]*)\)/gi, ' ');
-  operator = squash(operator);
+  const operator = extractOperatorName(original);
   return { operator, vehicleType };
+}
+
+function displayOperator(rawOrMovement = '') {
+  if (rawOrMovement && typeof rawOrMovement === 'object') {
+    return resolveCoachOperator(rawOrMovement) || '—';
+  }
+  const name = extractOperatorName(rawOrMovement);
+  if (name && !isTrainOperatingCompany(name) && !looksLikeCallingPatternOnly(name)) return name;
+  return '—';
 }
 
 function detectColumnMap(headerRow) {
@@ -283,7 +448,7 @@ function normaliseMovement(raw, sheet, index) {
   }
 
   const id = `${sheet.code}-${raw.movementType}-${padTime(raw.time)}-${raw.coachNumber || index}-${raw.destinationCode || 'UNK'}`;
-  return {
+  const movement = {
     id,
     sheetStationCode: sheet.code,
     sheetStationName: sheet.name,
@@ -295,7 +460,7 @@ function normaliseMovement(raw, sheet, index) {
     destinationCode: raw.destinationCode,
     destinationName: raw.destinationName,
     destinationNameFull: raw.destinationNameFull || raw.destinationName,
-    operator: raw.operator,
+    operator: raw.operator || '',
     vehicleType: raw.vehicleType,
     callingPattern,
     isDirect: callingPattern.length <= 2,
@@ -305,6 +470,13 @@ function normaliseMovement(raw, sheet, index) {
     status: 'upcoming',
     completedAt: null,
   };
+  return applyMovementLabels(movement);
+}
+
+function applyMovementLabels(movement) {
+  const resolved = resolveCoachOperator(movement);
+  if (resolved) movement.operator = resolved;
+  return movement;
 }
 
 function parseAndNormalise(text, fileName = '') {
@@ -619,7 +791,9 @@ function getInboundOriginStop(cycle) {
 }
 
 function enrichMovements(movements, sheet) {
-  return linkMovementsByCoach(movements);
+  const linked = linkMovementsByCoach(movements);
+  for (const m of linked) applyMovementLabels(m);
+  return linked;
 }
 
 function getEffectiveNow(sheet) {
@@ -647,6 +821,8 @@ function formatCountdown(mins) {
     normaliseText, squash, padTime, cellToString, normalizeTime,
     parseSheetHeader, parseSheetHeaderFromFilename, findSheetMetaInGrid,
     parseDestination, parseCallingLine, formatCoachNumber, parseOperatorField,
+    extractOperatorName, resolveCoachOperator, displayOperator, shortDestinationLabel,
+    stripCallingPatternText, isTrainOperatingCompany, PLACE_BY_CODE,
     detectColumnMap, splitCSVRows, parseCSVRow, parseSheetGrid,
     parseCSVText, buildDatetime, normaliseMovement, parseAndNormalise,
     parsePDFText, isDepartureFromStation, isArrivalAtStation, enrichMovements,

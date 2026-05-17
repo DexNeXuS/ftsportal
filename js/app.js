@@ -10,6 +10,7 @@ const state = {
 };
 
 let clockTimer = null;
+let lastCheatPatternHour = null;
 
 function init() {
   bindTabs();
@@ -36,6 +37,18 @@ function init() {
   }
 }
 
+function syncCheatSheetToCurrentHour() {
+  if (!state.sheet) return;
+  const AD = window.AD;
+  const now = AD.getEffectiveNow(state.sheet);
+  const hour = now.getHours();
+  lastCheatPatternHour = hour;
+  const container = document.getElementById('cheat-sheet-content');
+  if (container?.querySelector('.cheat-route')) {
+    AD.applyCheatSheetTimeTabs(container, hour);
+  }
+}
+
 function switchTab(tab) {
   document.querySelectorAll('.tab-btn, .dock-btn').forEach((b) => {
     const on = b.dataset.tab === tab;
@@ -46,6 +59,7 @@ function switchTab(tab) {
     p.classList.toggle('active', p.id === `panel-${tab}`);
   });
   document.getElementById('live-chrome-bar')?.classList.toggle('is-visible', tab === 'live');
+  if (tab === 'cheat') syncCheatSheetToCurrentHour();
   window.scrollTo({ top: 0, behavior: 'smooth' });
   window.requestAnimationFrame(() => {
     window.AD.updateChromeMetrics();
@@ -176,13 +190,13 @@ function setUploadPanelMode(loaded, sheet = null) {
       label.textContent = `${sheet.name} (${sheet.code}) · ${sheet.start} → ${sheet.end}`;
     }
     if (trigger) {
-      trigger.title = 'Replace A&D sheet — PDF, XLSX, or CSV';
+      trigger.title = 'Replace A&D sheet — PDF, XLSX, XLS, or CSV';
     }
   } else {
     section?.setAttribute('hidden', '');
     if (label) label.textContent = '';
     if (trigger) {
-      trigger.title = 'Upload A&D sheet — PDF, XLSX, or CSV';
+      trigger.title = 'Upload A&D sheet — PDF, XLSX, XLS, or CSV';
     }
   }
   window.requestAnimationFrame(() => window.AD.updateChromeMetrics?.());
@@ -251,6 +265,18 @@ function bindDelegation() {
       return;
     }
 
+    const stopperBtn = e.target.closest('[data-action="toggle-stoppers"]');
+    if (stopperBtn) {
+      const card = stopperBtn.closest('.vehicle-card');
+      const panel = card?.querySelector('.vehicle-route-detail');
+      if (panel) {
+        const opening = panel.hidden;
+        panel.hidden = !opening;
+        stopperBtn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+      }
+      return;
+    }
+
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
     const id = btn.dataset.id;
@@ -273,7 +299,7 @@ async function handleFile(file) {
       const text = await file.text();
       result = AD.parseAndNormalise(text, file.name);
     } else {
-      throw new Error('Please upload a PDF, XLSX, or CSV A&D sheet.');
+      throw new Error('Please upload a PDF, XLSX, XLS, or CSV A&D sheet.');
     }
     setData(result.sheet, result.movements, {
       statusMsg: `Loaded ${result.sheet.name} (${result.sheet.code}) — ${result.movements.length} movements from ${file.name}`,
@@ -312,7 +338,7 @@ function refreshAll() {
   const now = AD.getEffectiveNow(state.sheet);
   AD.renderLiveBoard(state.movements, state.sheet, now, state.liveFilter);
   AD.renderCompleted(state.movements);
-  AD.renderCheatSheet(state.movements, state.sheet);
+  AD.renderCheatSheet(state.movements, state.sheet, now);
   AD.updateCountdowns(now, state.movements);
   refreshFullTable();
 }
@@ -372,6 +398,15 @@ function startClock() {
     if (state.sheet) {
       AD.renderLiveBoard(state.movements, state.sheet, now, state.liveFilter);
       AD.updateCountdowns(now, state.movements);
+      const hour = now.getHours();
+      const cheatOpen = document.getElementById('panel-cheat')?.classList.contains('active');
+      if (cheatOpen && hour !== lastCheatPatternHour) {
+        lastCheatPatternHour = hour;
+        const container = document.getElementById('cheat-sheet-content');
+        if (container?.querySelector('.cheat-route')) {
+          AD.applyCheatSheetTimeTabs(container, hour);
+        }
+      }
     }
   };
   tick();
